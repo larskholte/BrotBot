@@ -232,7 +232,7 @@ int FracDataApplies(FracData *fd, FracData *focus) {
 	return PointEquals(&fd->center,&focus->center) &&
 		(fd->height == focus->height) &&
 		(fd->width == focus->width) &&
-		(fd->zoom == floor(focus->zoom));
+		(fd->zoom == floor(focus->zoom) || fd->zoom == ceil(focus->zoom));
 }
 
 void GenFractalTexture(PointData *pd, int len, char *tbuf) {
@@ -257,20 +257,23 @@ void GenerateFractalTexture(void) {
 		glDeleteTextures(1,&tex);
 	}
 	*/
-	//glEnable(GL_TEXTURE_2D);
 	tbuf = realloc(tbuf,current->width*current->height*3);
 	if (!tbuf) ExitWithError(1);
 	tbufsize = current->width*current->height*3;
 	GenFractalTexture(current->data,current->width*current->height,tbuf);
+	tbuf[0] = tbuf[1] = tbuf[2] = 128;
 	if (tex == 0) {
 		glGenTextures(1,&tex);
 		glBindTexture(GL_TEXTURE_2D,tex);
+		glPixelStorei(GL_UNPACK_ALIGNMENT,1);
 		glTexImage2D(GL_TEXTURE_2D,0,GL_RGB,current->width,current->height,0,GL_RGB,GL_UNSIGNED_BYTE,tbuf);
 	} else {
 		glBindTexture(GL_TEXTURE_2D,tex);
+		glPixelStorei(GL_UNPACK_ALIGNMENT,1);
 		//glTexSubImage2D(GL_TEXTURE_2D,0,0,0,current->width,current->height,GL_RGB,GL_UNSIGNED_BYTE,tbuf);
+		glTexImage2D(GL_TEXTURE_2D,0,GL_RGB,current->width,current->height,0,GL_RGB,GL_UNSIGNED_BYTE,tbuf);
 	}
-	glTexEnvi(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,GL_REPLACE);
+	//glTexEnvi(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,GL_REPLACE);
 	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_BORDER);
 	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_BORDER);
 	float color[] = { 1.0f, 0.0f, 0.0f, 1.0f };
@@ -284,6 +287,7 @@ pthread_mutex_t dispMutex = PTHREAD_MUTEX_INITIALIZER;
 void fractalDisplay(void) {
 	int ret = pthread_mutex_lock(&dispMutex);
 	if (ret) ExitWithError(1);
+	//do {
 	focus.width = glutGet(GLUT_WINDOW_WIDTH);
 	focus.height = glutGet(GLUT_WINDOW_HEIGHT);
 	if (current) {
@@ -317,6 +321,9 @@ void fractalDisplay(void) {
 		Populate(&fd2);
 		current = &fd1;
 	}
+	//} while (focus.width != glutGet(GLUT_WINDOW_WIDTH) || focus.height != glutGet(GLUT_WINDOW_HEIGHT));
+	//
+	// TODO: decide where to place texture based on zoom level and center of chosen (applicable) frame
 	
 	GenerateFractalTexture();
 	//glEnable(GL_TEXTURE_2D);
@@ -339,6 +346,44 @@ void fractalDisplay(void) {
 	if (ret) ExitWithError(1);
 }
 
+struct {
+	int indrag;
+	int dragx, dragy; // Original mouse coordinates
+	Point dragcenter; // Original fractal center
+} Mouse;
+void Zoom(double amt) {
+	focus.zoom *= amt;
+	glutPostRedisplay();
+}
+void ScrollWheel(int clicks) {
+	Zoom(0.05*clicks);
+}
+void fractalMouse(int button, int state, int x, int y) {
+	printf("down: %d left: %d x: %d y: %d\n",state==GLUT_DOWN,button==GLUT_LEFT_BUTTON,x,y);
+	if (state == GLUT_DOWN && button == GLUT_LEFT_BUTTON) {
+		Mouse.indrag = 1;
+		Mouse.dragx = x;
+		Mouse.dragy = y;
+		Mouse.dragcenter = focus.center;
+	}
+	else Mouse.indrag = 0;
+	if (button == 3) { // Scroll up
+		ScrollWheel(1);
+	} else if (button == 4) { // Scroll down
+		ScrollWheel(-1);
+	}
+}
+void fractalMouseMotion(int x, int y) {
+	printf("mouse motion: x: %d y %d\n",x,y);
+	if (Mouse.indrag) {
+		double sqrta = sqrt((double)focus.height/focus.width);
+		double dx = pow(2.0,-focus.zoom) * sqrta / focus.height;
+		focus.center.i = Mouse.dragcenter.i + (Mouse.dragx-x)*dx;
+		focus.center.j = Mouse.dragcenter.j + (y-Mouse.dragy)*dx;
+		glutPostRedisplay();
+	}
+}
+
 int main(int argc, char **argv) {
 	int width = 400, height = 400;
 
@@ -349,6 +394,8 @@ int main(int argc, char **argv) {
 	glutCreateWindow("BrotBot");
 	glutReshapeFunc(fractalReshape);
 	glutDisplayFunc(fractalDisplay);
+	glutMouseFunc(fractalMouse);
+	glutMotionFunc(fractalMouseMotion);
 	
 	GLenum err = glewInit();
 	if (err != GLEW_OK) {
@@ -364,6 +411,8 @@ int main(int argc, char **argv) {
 	}
 	glTexImage2D(GL_TEXTURE_2D,0,GL_RGB,width,height,0,GL_RGB,GL_UNSIGNED_BYTE,data);
 	*/
+
+	glEnable(GL_TEXTURE_2D);
 
 	focus.height = height, focus.width = width;
 	focus.zoom = -1;
