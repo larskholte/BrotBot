@@ -40,6 +40,10 @@ typedef struct FracData {
 	int height, width;
 	PointData *data;
 } FracData;
+double GetDx(FracData *fd) {
+	double sqrta = sqrt((double)fd->height/fd->width);
+	return pow(2.0,-fd->zoom) * sqrta / fd->height;
+}
 
 int maxiter = 128;
 
@@ -59,8 +63,7 @@ void ExitWithError() {
 void Populate(FracData *fd) {
 	fd->data = realloc(fd->data,fd->width*fd->height*sizeof(PointData));
 	if (!fd->data) ExitWithError(1);
-	double sqrta = sqrt((double)fd->height/fd->width);
-	double dx = pow(2.0,-fd->zoom) * sqrta / fd->height;
+	double dx = GetDx(fd);
 	// Center of lower left corner pixel
 	PointData p1;
 	p1.point.i = fd->center.i + dx/2*(1-fd->width);
@@ -236,8 +239,7 @@ typedef struct {
 	double x, y, width, height;
 } Rect;
 void GetFocusRect(FracData *fd, Rect *r) {
-	double sqrta = sqrt((double)fd->height/fd->width);
-	double dx = pow(2.0,-fd->zoom) * sqrta / fd->height;
+	double dx = GetDx(fd);
 	r->width = dx*fd->width;
 	r->height = dx*fd->height;
 	r->x = fd->center.i - r->width/2;
@@ -324,7 +326,6 @@ pthread_mutex_t dispMutex = PTHREAD_MUTEX_INITIALIZER;
 void fractalDisplay(void) {
 	int ret = pthread_mutex_lock(&dispMutex);
 	if (ret) ExitWithError(1);
-	//do {
 	focus.width = glutGet(GLUT_WINDOW_WIDTH);
 	focus.height = glutGet(GLUT_WINDOW_HEIGHT);
 	Rect r;
@@ -364,8 +365,6 @@ void fractalDisplay(void) {
 		current = &fd1;
 		FracDataApplies(current,&focus,&r);
 	}
-	//} while (focus.width != glutGet(GLUT_WINDOW_WIDTH) || focus.height != glutGet(GLUT_WINDOW_HEIGHT));
-	//
 	// TODO: decide where to place texture based on zoom level and center of chosen (applicable) frame
 	
 	GenerateFractalTexture();
@@ -394,14 +393,6 @@ struct {
 	int dragx, dragy; // Original mouse coordinates
 	Point dragcenter; // Original fractal center
 } Mouse;
-void Zoom(double amt) {
-	focus.zoom += amt;
-	printf("zoom: %f\n",focus.zoom);
-	glutPostRedisplay();
-}
-void ScrollWheel(int clicks) {
-	Zoom(0.0625*clicks);
-}
 void fractalMouse(int button, int state, int x, int y) {
 	//printf("down: %d left: %d x: %d y: %d\n",state==GLUT_DOWN,button==GLUT_LEFT_BUTTON,x,y);
 	if (state == GLUT_DOWN && button == GLUT_LEFT_BUTTON) {
@@ -411,17 +402,30 @@ void fractalMouse(int button, int state, int x, int y) {
 		Mouse.dragcenter = focus.center;
 	}
 	else Mouse.indrag = 0;
-	if (button == 3) { // Scroll up
-		ScrollWheel(1);
-	} else if (button == 4) { // Scroll down
-		ScrollWheel(-1);
+	if (button == 3 || button == 4) { // Scroll
+		double dx = GetDx(&focus);
+		double factor;
+		if (button == 3) {
+			focus.zoom += 0.0625;
+			factor = pow(2,-0.0625);
+		}
+		else {
+			focus.zoom -= 0.0625;
+			factor = pow(2,0.0625);
+		}
+		Point mp = { // Mouse point
+			.i = (2*x-focus.width)*dx/2 + focus.center.i,
+			.j = (focus.height-2*y)*dx/2 + focus.center.j
+		};
+		focus.center.i = mp.i - factor*(mp.i - focus.center.i);
+		focus.center.j = mp.j - factor*(mp.j - focus.center.j);
+		glutPostRedisplay();
 	}
 }
 void fractalMouseMotion(int x, int y) {
 	printf("mouse motion: x: %d y %d\n",x,y);
 	if (Mouse.indrag) {
-		double sqrta = sqrt((double)focus.height/focus.width);
-		double dx = pow(2.0,-focus.zoom) * sqrta / focus.height;
+		double dx = GetDx(&focus);
 		focus.center.i = Mouse.dragcenter.i + (Mouse.dragx-x)*dx;
 		focus.center.j = Mouse.dragcenter.j + (y-Mouse.dragy)*dx;
 		glutPostRedisplay();
