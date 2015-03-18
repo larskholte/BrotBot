@@ -4,6 +4,9 @@
 #include <math.h>
 #include <pthread.h>
 
+//
+// Points on the complex plane
+//
 typedef struct Point {
 	double i, j;
 } Point;
@@ -228,21 +231,55 @@ void fractalReshape(int width, int height) {
 	glViewport(0,0,width,height);
 }
 
-int FracDataApplies(FracData *fd, FracData *focus) {
-	return PointEquals(&fd->center,&focus->center) &&
-		(fd->height == focus->height) &&
-		(fd->width == focus->width) &&
-		(fd->zoom == floor(focus->zoom) || fd->zoom == ceil(focus->zoom));
+// Rectangle
+typedef struct {
+	double x, y, width, height;
+} Rect;
+void GetFocusRect(FracData *fd, Rect *r) {
+	double sqrta = sqrt((double)fd->height/fd->width);
+	double dx = pow(2.0,-fd->zoom) * sqrta / fd->height;
+	r->width = dx*fd->width;
+	r->height = dx*fd->height;
+	r->x = fd->center.i - r->width/2;
+	r->y = fd->center.j - r->height/2;
+}
+// Returns whether r1 contains r2
+// A rectangle contains itself
+int RectContains(Rect *r1, Rect *r2) {
+	return (r1->x <= r2->x) &&
+		(r1->y <= r2->y) &&
+		(r1->x + r1->width >= r2->x + r2->width) &&
+		(r1->y + r1->height >= r2->y + r2->height);
+}
+
+// Returns whether fd can be used to display the region in focus
+// If so, sets rect to the texture coordinates which should be used
+int FracDataApplies(FracData *fd, FracData *focus, Rect *rect) {
+	Rect datar;
+	GetFocusRect(fd,&datar);
+	Rect focusr;
+	GetFocusRect(focus,&focusr);
+	// Data rect must contain focus rect
+	if (!RectContains(&datar,&focusr)) {
+		return 0;
+	}
+	// Buffers are calculated at twice pixel density of screen
+	if (focusr.width < datar.width/2 || focusr.height < datar.height/2) {
+		return 0;
+	}
+	rect->x = (focusr.x - datar.x) / datar.width;
+	rect->y = (focusr.y - datar.y) / datar.height;
+	rect->width = focusr.width / datar.width;
+	rect->height = focusr.height / datar.height;
+	return 1;
 }
 
 void GenFractalTexture(PointData *pd, int len, char *tbuf) {
 	for (int i = 0; i < len; i++) {
-		// White - diverged
-		if (pd[i].iter < 0) {
+		if (pd[i].iter < 0) { // White - diverged
 			tbuf[i*3] = tbuf[i*3+1] = tbuf[i*3+2] = 0xff;
 		}
-		// Black - undiverged
-		else {
+		else { // Black - undiverged
 			tbuf[i*3] = tbuf[i*3+1] = tbuf[i*3+2] = 0x00;
 		}
 	}
@@ -290,9 +327,10 @@ void fractalDisplay(void) {
 	//do {
 	focus.width = glutGet(GLUT_WINDOW_WIDTH);
 	focus.height = glutGet(GLUT_WINDOW_HEIGHT);
+	Rect r;
 	if (current) {
-		if (FracDataApplies(&fd1,&focus)) current = &fd1;
-		else if (FracDataApplies(&fd2,&focus)) current = &fd2;
+		if (FracDataApplies(&fd1,&focus,&r)) current = &fd1;
+		else if (FracDataApplies(&fd2,&focus,&r)) current = &fd2;
 		else { // Fix the one farthest from focus
 			if (abs(focus.zoom-fd1.zoom) > abs(focus.zoom-fd2.zoom)) {
 				fd1.zoom = floor(focus.zoom);
@@ -302,17 +340,21 @@ void fractalDisplay(void) {
 				current = &fd2;
 			}
 			current->center = focus.center;
-			current->height = focus.height;
-			current->width = focus.width;
+			current->height = focus.height*2;
+			current->width = focus.width*2;
 			if (current->width > GL_MAX_TEXTURE_SIZE) current->width = GL_MAX_TEXTURE_SIZE;
 			if (current->height > GL_MAX_TEXTURE_SIZE) current->height = GL_MAX_TEXTURE_SIZE;
 			Populate(current);
+			if (!FracDataApplies(current,&focus,&r)) {
+				fprintf(stderr,"recalculated fractal data does not apply\n");
+				exit(EXIT_FAILURE);
+			}
 		}
 	} else { // FracData's need to be populated
 		fd1.zoom = floor(focus.zoom);
 		fd2.zoom = fd1.zoom - 1;
-		fd1.height = fd2.height = focus.height;
-		fd1.width = fd2.width = focus.width;
+		fd1.height = fd2.height = focus.height*2;
+		fd1.width = fd2.width = focus.width*2;
 		if (fd1.width > GL_MAX_TEXTURE_SIZE) fd1.width = GL_MAX_TEXTURE_SIZE;
 		if (fd1.height > GL_MAX_TEXTURE_SIZE) fd1.height = GL_MAX_TEXTURE_SIZE;
 		if (fd2.width > GL_MAX_TEXTURE_SIZE) fd2.width = GL_MAX_TEXTURE_SIZE;
@@ -320,6 +362,7 @@ void fractalDisplay(void) {
 		Populate(&fd1);
 		Populate(&fd2);
 		current = &fd1;
+		FracDataApplies(current,&focus,&r);
 	}
 	//} while (focus.width != glutGet(GLUT_WINDOW_WIDTH) || focus.height != glutGet(GLUT_WINDOW_HEIGHT));
 	//
@@ -331,13 +374,13 @@ void fractalDisplay(void) {
 	glClearColor(0.0,0.0,0.4,1.0);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	glBegin(GL_QUADS);
-		glTexCoord2f(0,0);
+		glTexCoord2f(r.x,r.y);
 		glVertex2f(-1.0,-1.0);
-		glTexCoord2f(1,0);
+		glTexCoord2f(r.x+r.width,r.y);
 		glVertex2f(1.0,-1.0);
-		glTexCoord2f(1,1);
+		glTexCoord2f(r.x+r.width,r.y+r.height);
 		glVertex2f(1.0,1.0);
-		glTexCoord2f(0,1);
+		glTexCoord2f(r.x,r.y+r.height);
 		glVertex2f(-1.0,1.0);
 	glEnd();
 	//glDisable(GL_TEXTURE_2D);
@@ -352,14 +395,15 @@ struct {
 	Point dragcenter; // Original fractal center
 } Mouse;
 void Zoom(double amt) {
-	focus.zoom *= amt;
+	focus.zoom += amt;
+	printf("zoom: %f\n",focus.zoom);
 	glutPostRedisplay();
 }
 void ScrollWheel(int clicks) {
-	Zoom(0.05*clicks);
+	Zoom(0.0625*clicks);
 }
 void fractalMouse(int button, int state, int x, int y) {
-	printf("down: %d left: %d x: %d y: %d\n",state==GLUT_DOWN,button==GLUT_LEFT_BUTTON,x,y);
+	//printf("down: %d left: %d x: %d y: %d\n",state==GLUT_DOWN,button==GLUT_LEFT_BUTTON,x,y);
 	if (state == GLUT_DOWN && button == GLUT_LEFT_BUTTON) {
 		Mouse.indrag = 1;
 		Mouse.dragx = x;
