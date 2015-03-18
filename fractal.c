@@ -13,6 +13,9 @@ typedef struct Point {
 double Distance(Point *p1, Point *p2) {
 	return sqrt((p1->i-p2->i)*(p1->i-p2->i) + (p1->j-p2->j)*(p1->j-p2->j));
 }
+double Magnitude(Point *p) {
+	return sqrt(p->i*p->i+p->j*p->j);
+}
 int PointEquals(Point *p1, Point *p2) {
 	return p1->i == p2->i && p1->j == p2->j;
 }
@@ -45,7 +48,7 @@ double GetDx(FracData *fd) {
 	return pow(2.0,-fd->zoom) * sqrta / fd->height;
 }
 
-int maxiter = 128;
+int maxiter = 256;
 
 FracData fd1, fd2;
 // The width and height are the window width and height in pixels
@@ -277,12 +280,17 @@ int FracDataApplies(FracData *fd, FracData *focus, Rect *rect) {
 }
 
 void GenFractalTexture(PointData *pd, int len, char *tbuf) {
+	int maxiter = 0;
 	for (int i = 0; i < len; i++) {
-		if (pd[i].iter < 0) { // White - diverged
-			tbuf[i*3] = tbuf[i*3+1] = tbuf[i*3+2] = 0xff;
-		}
-		else { // Black - undiverged
+		if (pd[i].iter > maxiter) maxiter = pd[i].iter;
+	}
+	for (int i = 0; i < len; i++) {
+		if (pd[i].iter > 0) { // Black - undiverged
 			tbuf[i*3] = tbuf[i*3+1] = tbuf[i*3+2] = 0x00;
+		}
+		else { // Grey - diverged
+			unsigned char val = (double)(maxiter+pd[i].iter+1)/maxiter*255;
+			tbuf[i*3] = tbuf[i*3+1] = tbuf[i*3+2] = val;
 		}
 	}
 }
