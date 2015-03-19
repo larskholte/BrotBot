@@ -48,7 +48,8 @@ double GetDx(FracData *fd) {
 	return pow(2.0,-fd->zoom) * sqrta / fd->height;
 }
 
-int maxiter = 256;
+int iterperpass = 64;
+int maxpass = 64;
 
 FracData fd1, fd2;
 // The width and height are the window width and height in pixels
@@ -66,34 +67,69 @@ void ExitWithError() {
 void Populate(FracData *fd) {
 	fd->data = realloc(fd->data,fd->width*fd->height*sizeof(PointData));
 	if (!fd->data) ExitWithError(1);
-	double dx = GetDx(fd);
-	// Center of lower left corner pixel
-	PointData p1;
-	p1.point.i = fd->center.i + dx/2*(1-fd->width);
-	p1.point.j = fd->center.j + dx/2*(1-fd->height);
-	// Pixel we are currently iterating
-	PointData p2 = p1;
+	// Initialize all PointData's
 	int i = 0;
 	for (int y = 0; y < fd->height; y++) {
 		for (int x = 0; x < fd->width; x++) {
-			PointData p3 = { .point = { .i = 0, .j = 0 }, .iter = 0 };
-			int iter;
-			for (iter = 0; iter < maxiter; iter++) {
-				Iterate(&p2.point,&p3.point);
-				if (Diverged(&p3.point)) {
-					p3.iter = -iter - 1;
+			fd->data[i].point.i = 0;
+			fd->data[i].point.j = 0;
+			fd->data[i++].iter = 0;
+		}
+	}
+	// Center of lower left corner pixel
+	double dx = GetDx(fd);
+	Point llc = {
+		.i = fd->center.i + dx/2*(1-fd->width),
+		.j = fd->center.j + dx/2*(1-fd->height)
+	};
+	// Iterate to completion
+	// Completion occurs after we pass the hump
+	// We exceed the threshold, and then fall under it again
+	int threshold = (fd->width*fd->height)*0.0001*iterperpass;
+	int state = 0;
+	int p;
+	for (p = 0; p < maxpass; p++) {
+		int divcount = 0; // Number diverged in this pass
+		i = 0; // Index in data array
+		// We start at the lower left corner
+		Point c = llc;
+		for (int y = 0; y < fd->height; y++) {
+			for (int x = 0; x < fd->width; x++) {
+				int iter;
+				int div = 0;
+				for (iter = 0; iter < iterperpass; iter++) {
+					if (fd->data[i].iter < 0) {
+						break; // Already known to diverge
+					}
+					Iterate(&c,&fd->data[i].point);
+					if (Diverged(&fd->data[i].point)) {
+						divcount++;
+						iter++;
+						div = 1;
+						break;
+					}
+				}
+				if (fd->data[i].point.i != fd->data[i].point.i) {
 					break;
 				}
+				fd->data[i].iter += iter;
+				if (div) { // Mark as diverged
+					fd->data[i].iter = -fd->data[i].iter - 1;
+				}
+				c.i += dx; // Step to the right
+				i++;
 			}
-			if (iter == maxiter) {
-				p3.iter = iter;
-			}
-			fd->data[i++] = p3;
-			p2.point.i += dx;
+			c.i = llc.i; // Back to leftmost column
+			c.j += dx; // Step up
 		}
-		p2.point.i = p1.point.i;
-		p2.point.j += dx;
+		if (divcount >= threshold) {
+			state = 1;
+		} else if (state == 1) {
+			p++;
+			break;
+		}
 	}
+	printf("made %d passes populating fractal\n",p);
 }
 
 int LoadShaders(const char * vertpath, const char * fragpath) {
@@ -280,17 +316,12 @@ int FracDataApplies(FracData *fd, FracData *focus, Rect *rect) {
 }
 
 void GenFractalTexture(PointData *pd, int len, char *tbuf) {
-	int maxiter = 0;
-	for (int i = 0; i < len; i++) {
-		if (pd[i].iter > maxiter) maxiter = pd[i].iter;
-	}
 	for (int i = 0; i < len; i++) {
 		if (pd[i].iter > 0) { // Black - undiverged
 			tbuf[i*3] = tbuf[i*3+1] = tbuf[i*3+2] = 0x00;
 		}
 		else { // Grey - diverged
-			unsigned char val = (double)(maxiter+pd[i].iter+1)/maxiter*255;
-			tbuf[i*3] = tbuf[i*3+1] = tbuf[i*3+2] = val;
+			tbuf[i*3] = tbuf[i*3+1] = tbuf[i*3+2] = pd[i].iter&0xff;
 		}
 	}
 }
@@ -413,14 +444,15 @@ void fractalMouse(int button, int state, int x, int y) {
 	if (button == 3 || button == 4) { // Scroll
 		double dx = GetDx(&focus);
 		double factor;
-		if (button == 3) {
+		if (button == 3) { // Scroll up: zoom in
 			focus.zoom += 0.0625;
 			factor = pow(2,-0.0625);
 		}
-		else {
+		else { // Scroll down: zoom out
 			focus.zoom -= 0.0625;
 			factor = pow(2,0.0625);
 		}
+		printf("zoomed to %f\n",focus.zoom);
 		Point mp = { // Mouse point
 			.i = (2*x-focus.width)*dx/2 + focus.center.i,
 			.j = (focus.height-2*y)*dx/2 + focus.center.j
@@ -431,11 +463,11 @@ void fractalMouse(int button, int state, int x, int y) {
 	}
 }
 void fractalMouseMotion(int x, int y) {
-	printf("mouse motion: x: %d y %d\n",x,y);
 	if (Mouse.indrag) {
 		double dx = GetDx(&focus);
 		focus.center.i = Mouse.dragcenter.i + (Mouse.dragx-x)*dx;
 		focus.center.j = Mouse.dragcenter.j + (y-Mouse.dragy)*dx;
+		printf("moved to x: %f y %f\n",focus.center.i,focus.center.j);
 		glutPostRedisplay();
 	}
 }
